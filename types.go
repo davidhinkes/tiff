@@ -89,4 +89,3 @@ func (e RationalEntry) Val(o binary.ByteOrder) []byte {
 	}
 	return buffer.Bytes()
 }
-

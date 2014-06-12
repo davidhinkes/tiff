@@ -22,7 +22,7 @@ func TestSize(t *testing.T) {
 	}
 	buffer := new(bytes.Buffer)
 	tiff.Encode(buffer, binary.BigEndian)
-	if got,want := len(buffer.Bytes()),26; got != want {
+	if got, want := len(buffer.Bytes()), 26; got != want {
 		t.Errorf("got %v want %v", got, want)
 	}
 }
@@ -38,7 +38,7 @@ func TestBigSize(t *testing.T) {
 	}
 	buffer := new(bytes.Buffer)
 	tiff.Encode(buffer, binary.BigEndian)
-	if got,want := len(buffer.Bytes()),34; got != want {
+	if got, want := len(buffer.Bytes()), 34; got != want {
 		t.Errorf("got %v want %v", got, want)
 	}
 }
