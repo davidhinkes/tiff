@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"io"
+	"reflect"
 )
 
 type Tiff struct {
@@ -11,18 +12,16 @@ type Tiff struct {
 }
 
 type IDF struct {
-	Entries []Entry
+	// Entries is a map of tags to concrete values.
+	Entries map[uint16]interface{}
 }
 
-type entryInfo struct {
-	Tag   uint16
-	Type  uint16
-	Count uint32
-}
-
-type Entry interface {
-	Info() entryInfo
-	Val(b binary.ByteOrder) []byte
+type coder struct {
+	Value       func(b []byte, count uint32, o binary.ByteOrder) (interface{}, error)
+	PayloadSize func(count uint32) int
+	Serialize   func(val interface{}, o binary.ByteOrder) ([]byte, uint32)
+	ID          uint16
+	Zero        interface{}
 }
 
 type writerMonad struct {
@@ -59,12 +58,15 @@ func (t Tiff) Encode(w io.Writer, b binary.ByteOrder) {
 	for _, dir := range t.IDFs {
 		binary.Write(monad, b, uint32(buffer.Len()+4))
 		binary.Write(monad, b, uint16(len(dir.Entries)))
-		for _, e := range dir.Entries {
-			i := e.Info()
-			binary.Write(monad, b, i.Tag)
-			binary.Write(monad, b, i.Type)
-			binary.Write(monad, b, i.Count)
-			v := e.Val(b)
+		for tag, e := range dir.Entries {
+			coder, ok := codersByType[reflect.TypeOf(e)]
+			if !ok {
+				continue
+			}
+			binary.Write(monad, b, tag)
+			binary.Write(monad, b, coder.ID)
+			v, count := coder.Serialize(e, b)
+			binary.Write(monad, b, count)
 			if len(v) <= 4 {
 				for len(v) < 4 {
 					v = append(v, byte(0))

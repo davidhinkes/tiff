@@ -7,13 +7,9 @@ import (
 	"testing"
 )
 
-func TestNothing(t *testing.T) {
-	var _ Entry = ByteEntry{T: 0}
-}
-
 func TestSize(t *testing.T) {
-	es := []Entry{
-		ShortEntry{42, []uint16{43}},
+	es := map[uint16]interface{}{
+		42: []uint16{43},
 	}
 	tiff := Tiff{
 		IDFs: []IDF{
@@ -28,8 +24,8 @@ func TestSize(t *testing.T) {
 }
 
 func TestBigSize(t *testing.T) {
-	es := []Entry{
-		ASCIIEntry{43, []string{"Hello"}},
+	es := map[uint16]interface{}{
+		43: []string{"Hello"},
 	}
 	tiff := Tiff{
 		IDFs: []IDF{
@@ -44,9 +40,9 @@ func TestBigSize(t *testing.T) {
 }
 
 func TestByteOrder(t *testing.T) {
-	es := []Entry{
-		ShortEntry{42, []uint16{43}},
-		ASCIIEntry{43, []string{"Hello"}},
+	es := map[uint16]interface{}{
+		42: []uint16{43},
+		43: []string{"Hello"},
 	}
 	tiff := Tiff{
 		IDFs: []IDF{
