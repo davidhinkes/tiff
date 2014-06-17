@@ -3,6 +3,7 @@ package tiff
 import (
 	"bytes"
 	"encoding/binary"
+	"fmt"
 	"io"
 	"reflect"
 )
@@ -40,6 +41,112 @@ func (w *writerMonad) Write(b []byte) (int, error) {
 		w.Err = err
 	}
 	return n, w.Err
+}
+
+func Decode(r io.ReadSeeker) (Tiff, error) {
+	var err error
+	var tiff = Tiff{}
+	hdr := make([]byte, 2)
+	_, err = r.Read(hdr)
+	if err != nil {
+		return Tiff{}, err
+	}
+	hdrAsString := string(hdr)
+	var ordering binary.ByteOrder
+	if hdrAsString == "II" {
+		ordering = binary.LittleEndian
+	} else if hdrAsString == "MM" {
+		ordering = binary.BigEndian
+	} else {
+		return Tiff{}, fmt.Errorf("expecting II or MM as first two bytes; got %v", hdrAsString)
+	}
+	var magicNumber uint16
+	err = binary.Read(r, ordering, &magicNumber)
+	if err != nil {
+		return Tiff{}, err
+	}
+	if magicNumber != 42 {
+		return Tiff{}, fmt.Errorf("expecting magic number equal to 42; got %v", magicNumber)
+	}
+	for {
+		var idf = IDF{map[uint16]interface{}{}}
+		var idfAddr uint32
+		err = binary.Read(r, ordering, &idfAddr)
+		if err != nil {
+			return tiff, err
+		}
+		if idfAddr == 0 {
+			return tiff, nil
+		}
+		_, err = r.Seek(int64(idfAddr), 0)
+		if err != nil {
+			return tiff, err
+		}
+		var numEntries uint16
+		err = binary.Read(r, ordering, &numEntries)
+		if err != nil {
+			return tiff, err
+		}
+		for z := uint16(0); z < numEntries; z++ {
+			var tag uint16
+			err = binary.Read(r, ordering, &tag)
+			if err != nil {
+				return tiff, err
+			}
+			var typeID uint16
+			err = binary.Read(r, ordering, &typeID)
+			if err != nil {
+				return tiff, err
+			}
+			var count uint32
+			err = binary.Read(r, ordering, &count)
+			if err != nil {
+				return tiff, err
+			}
+			coder, ok := codersByTypeID[typeID]
+			if !ok {
+				continue
+			}
+			valueSize := coder.PayloadSize(count)
+			value := make([]byte, valueSize)
+			if valueSize <= 4 {
+				bytes := make([]byte, 4)
+				_, err := r.Read(bytes)
+				if err != nil {
+					return tiff, err
+				}
+				copy(value, bytes)
+			} else {
+				var valueAddr uint32
+				err = binary.Read(r, ordering, &valueAddr)
+				if err != nil {
+					return tiff, err
+				}
+				jump, err := r.Seek(0, 1)
+				if err != nil {
+					return tiff, err
+				}
+				_, err = r.Seek(int64(valueAddr), 0)
+				if err != nil {
+					return tiff, err
+				}
+				_, err = r.Read(value)
+				if err != nil {
+					return tiff, err
+				}
+				_, err = r.Seek(jump, 0)
+				if err != nil {
+					return tiff, err
+				}
+			}
+			valueAsInterface, err := coder.Value(value, count, ordering)
+			if err != nil {
+				return tiff, err
+			}
+			idf.Entries[tag] = valueAsInterface
+		}
+		tiff.IDFs = append(tiff.IDFs, idf)
+	}
 }
 
 func (t Tiff) Encode(w io.Writer, b binary.ByteOrder) {
@@ -82,7 +189,9 @@ func (t Tiff) Encode(w io.Writer, b binary.ByteOrder) {
 	binary.Write(monad, b, uint32(0))
 	def.Write(buffer, b)
 	buffer.WriteTo(w)
-	panic(monad.Err)
+	if monad.Err != nil {
+		panic(monad.Err)
+	}
 }
 
 type deferedWrite struct {
@@ -106,9 +215,13 @@ func (d deferedWrite) Write(buffer *bytes.Buffer, bo binary.ByteOrder) {
 		addr := buffer.Len()
 		monad.Write(i.data)
 		err := binary.Write(overwriteBuffer{buffer, i.index}, bo, uint32(addr))
-		panic(err)
+		if err != nil {
+			panic(err)
+		}
 	}
-	panic(monad.Err)
+	if monad.Err != nil {
+		panic(monad.Err)
+	}
 }
 
 type overwriteBuffer struct {

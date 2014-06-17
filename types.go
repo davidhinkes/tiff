@@ -11,11 +11,11 @@ type Rational struct {
 	Numerator   uint16
 }
 
-var codersByTypeId  = map[uint16]coder{}
+var codersByTypeID = map[uint16]coder{}
 var codersByType = map[reflect.Type]coder{}
 
 func registerCoder(c coder) {
-	codersByTypeId[c.ID] = c
+	codersByTypeID[c.ID] = c
 	codersByType[reflect.TypeOf(c.Zero)] = c
 }
 
@@ -42,7 +42,9 @@ func init() {
 			var ret []string
 			splits := bytes.Split(b, []byte{0})
 			for _, s := range splits {
-				ret = append(ret, string(s))
+				if len(s) > 0 {
+					ret = append(ret, string(s))
+				}
 			}
 			return ret, nil
 		},
@@ -55,9 +57,13 @@ func init() {
 			var count uint32
 			for _, s := range out {
 				_, err := buf.Write([]byte(s))
-				panic(err)
+				if err != nil {
+					panic(err)
+				}
 				_, err = buf.Write([]byte{0})
-				panic(err)
+				if err != nil {
+					panic(err)
+				}
 				count += (uint32(len(s)) + 1)
 			}
 			return buf.Bytes(), count

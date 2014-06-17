@@ -9,7 +9,7 @@ import (
 
 func TestSize(t *testing.T) {
 	es := map[uint16]interface{}{
-		42: []uint16{43},
+		42: []byte{43, 44},
 	}
 	tiff := Tiff{
 		IDFs: []IDF{
@@ -34,14 +34,19 @@ func TestBigSize(t *testing.T) {
 	}
 	buffer := new(bytes.Buffer)
 	tiff.Encode(buffer, binary.BigEndian)
-	if got, want := len(buffer.Bytes()), 34; got != want {
+	bs := buffer.Bytes()
+	if got, want := len(bs), 34; got != want {
 		t.Errorf("got %v want %v", got, want)
+	}
+	_, err := Decode(bytes.NewReader(bs))
+	if err != nil {
+		t.Error(err)
 	}
 }
 
 func TestByteOrder(t *testing.T) {
 	es := map[uint16]interface{}{
-		42: []uint16{43},
+		42: []byte{43},
 		43: []string{"Hello"},
 	}
 	tiff := Tiff{
@@ -54,5 +59,27 @@ func TestByteOrder(t *testing.T) {
 	got := buffer.Bytes()[0:2]
 	if want := []byte("MM"); !reflect.DeepEqual(got, want) {
 		t.Errorf("got %v, want %v", got, want)
+	}
+}
+
+func TestDecode(t *testing.T) {
+	es := map[uint16]interface{}{
+		42: []byte{43},
+		43: []string{"Hello"},
+		7:  []byte{1, 2, 3, 4, 5, 6, 7, 8},
+	}
+	tiff := Tiff{
+		IDFs: []IDF{
+			{Entries: es},
+		},
+	}
+	buffer := new(bytes.Buffer)
+	tiff.Encode(buffer, binary.BigEndian)
+	newTiff, err := Decode(bytes.NewReader(buffer.Bytes()))
+	if err != nil {
+		t.Error(err)
+	}
+	if !reflect.DeepEqual(tiff, newTiff) {
+		t.Errorf("got not equal, wanted equal;\n%v\nvs\n%v", tiff, newTiff)
 	}
 }
