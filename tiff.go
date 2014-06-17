@@ -18,11 +18,12 @@ type IDF struct {
 }
 
 type coder struct {
-	Value       func(b []byte, count uint32, o binary.ByteOrder) (interface{}, error)
+	Unmarshal   func(b []byte, count uint32, o binary.ByteOrder) (interface{}, error)
 	PayloadSize func(count uint32) int
-	Serialize   func(val interface{}, o binary.ByteOrder) ([]byte, uint32)
-	ID          uint16
-	Zero        interface{}
+	// Marshal retursn the bytes to write and the count.
+	Marshal func(val interface{}, o binary.ByteOrder) ([]byte, uint32)
+	ID      uint16
+	Zero    interface{}
 }
 
 type writerMonad struct {
@@ -139,7 +140,7 @@ func Decode(r io.ReadSeeker) (Tiff, error) {
 					return tiff, err
 				}
 			}
-			valueAsInterface, err := coder.Value(value, count, ordering)
+			valueAsInterface, err := coder.Unmarshal(value, count, ordering)
 			if err != nil {
 				return tiff, err
 			}
@@ -172,7 +173,7 @@ func (t Tiff) Encode(w io.Writer, b binary.ByteOrder) {
 			}
 			binary.Write(monad, b, tag)
 			binary.Write(monad, b, coder.ID)
-			v, count := coder.Serialize(e, b)
+			v, count := coder.Marshal(e, b)
 			binary.Write(monad, b, count)
 			if len(v) <= 4 {
 				for len(v) < 4 {

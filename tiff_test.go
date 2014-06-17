@@ -7,6 +7,23 @@ import (
 	"testing"
 )
 
+func TestReader(t *testing.T) {
+	var got = []byte{0, 0}
+	want := []byte{12, 43}
+	var buffer bytes.Buffer
+	err := binary.Write(&buffer, binary.BigEndian, want)
+	if err != nil {
+		t.Error(err)
+	}
+	err = binary.Read(&buffer, binary.BigEndian, got)
+	if err != nil {
+		t.Error(err)
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("got %v want %v", got, want)
+	}
+}
+
 func TestSize(t *testing.T) {
 	es := map[uint16]interface{}{
 		42: []byte{43, 44},
@@ -67,6 +84,7 @@ func TestDecode(t *testing.T) {
 		42: []byte{43},
 		43: []string{"Hello"},
 		7:  []byte{1, 2, 3, 4, 5, 6, 7, 8},
+		8:  []uint16{1, 2, 3, 4, 5, 6, 7, 8},
 	}
 	tiff := Tiff{
 		IDFs: []IDF{

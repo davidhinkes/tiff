@@ -7,8 +7,13 @@ import (
 )
 
 type Rational struct {
-	Denumerator uint16
-	Numerator   uint16
+	Denumerator uint32
+	Numerator   uint32
+}
+
+type SRational struct {
+	Denumerator int32
+	Numerator   int32
 }
 
 var codersByTypeID = map[uint16]coder{}
@@ -19,26 +24,52 @@ func registerCoder(c coder) {
 	codersByType[reflect.TypeOf(c.Zero)] = c
 }
 
-func init() {
-	// bytes
-	registerCoder(coder{
-		Value: func(b []byte, count uint32, o binary.ByteOrder) (interface{}, error) {
-			return b, nil
+func makeSimpleCoder(id uint16, zero interface{}, bytesPerElem int) coder {
+	ty := reflect.TypeOf(zero)
+	sliceOfTy := reflect.SliceOf(ty)
+	return coder{
+		Unmarshal: func(b []byte, count uint32, o binary.ByteOrder) (interface{}, error) {
+			elems := len(b) / bytesPerElem
+			v := reflect.MakeSlice(sliceOfTy, elems, elems)
+			err := binary.Read(bytes.NewReader(b), o, v.Interface())
+			if err != nil {
+				panic(err)
+			}
+			return v.Interface(), nil
 		},
 		PayloadSize: func(count uint32) int {
-			return int(count)
+			return int(count) * bytesPerElem
 		},
-		Serialize: func(val interface{}, o binary.ByteOrder) ([]byte, uint32) {
-			out := val.([]byte)
-			return out, uint32(len(out))
+		Marshal: func(val interface{}, o binary.ByteOrder) ([]byte, uint32) {
+			buffer := new(bytes.Buffer)
+			err := binary.Write(buffer, o, val)
+			if err != nil {
+				panic(err)
+			}
+			return buffer.Bytes(), uint32(reflect.ValueOf(val).Len())
 		},
-		ID:   1,
-		Zero: []byte{},
-	})
+		ID:   id,
+		Zero: reflect.Zero(sliceOfTy).Interface(),
+	}
+}
+
+func init() {
+	// Basic types of slices can use the simple coder.
+	registerCoder(makeSimpleCoder(1, uint8(0), 1))
+	registerCoder(makeSimpleCoder(3, uint16(0), 2))
+	registerCoder(makeSimpleCoder(4, uint32(0), 4))
+	registerCoder(makeSimpleCoder(5, Rational{}, 8))
+	registerCoder(makeSimpleCoder(6, int8(0), 1))
+	registerCoder(makeSimpleCoder(7, byte(0), 1))
+	registerCoder(makeSimpleCoder(8, int16(0), 2))
+	registerCoder(makeSimpleCoder(9, int32(0), 4))
+	registerCoder(makeSimpleCoder(10, SRational{}, 8))
+	registerCoder(makeSimpleCoder(11, float64(0), 8))
+	registerCoder(makeSimpleCoder(12, float32(0), 4))
 
 	// strings
 	registerCoder(coder{
-		Value: func(b []byte, _ uint32, o binary.ByteOrder) (interface{}, error) {
+		Unmarshal: func(b []byte, _ uint32, o binary.ByteOrder) (interface{}, error) {
 			var ret []string
 			splits := bytes.Split(b, []byte{0})
 			for _, s := range splits {
@@ -51,7 +82,7 @@ func init() {
 		PayloadSize: func(count uint32) int {
 			return int(count)
 		},
-		Serialize: func(val interface{}, o binary.ByteOrder) ([]byte, uint32) {
+		Marshal: func(val interface{}, o binary.ByteOrder) ([]byte, uint32) {
 			out := val.([]string)
 			var buf bytes.Buffer
 			var count uint32
