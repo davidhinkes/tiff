@@ -5,7 +5,9 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+	"log"
 	"reflect"
+	"sort"
 )
 
 type Tiff struct {
@@ -157,11 +159,17 @@ type encodingContext struct {
 	O binary.ByteOrder
 }
 
+// encodeIDF assumes that the writer is already at the desired location.
 func (ctx encodingContext) encodeIDF(idf IDF) {
-	binary.Write(ctx.W, ctx.O, uint32(ctx.B.Len()+4))
 	binary.Write(ctx.W, ctx.O, uint16(len(idf.Entries)))
-	for tag, e := range idf.Entries {
-		ctx.encodeEntry(tag, e)
+	// The tiff spec says the tags should be encoded in increasing order.
+	var tags []int  // Using []int instead of []uint16 to make life easier with sort.Ints.
+	for tag, _ := range idf.Entries {
+		tags = append(tags, int(tag))
+	}
+	sort.Ints(tags)
+	for _, tag := range tags {
+		ctx.encodeEntry(uint16(tag), idf.Entries[uint16(tag)])
 	}
 }
 
@@ -207,13 +215,14 @@ func (t Tiff) Encode(w io.Writer, b binary.ByteOrder) {
 	}
 	binary.Write(monad, b, uint16(42))
 	for _, dir := range t.IDFs {
+		binary.Write(ctx.W, ctx.O, uint32(ctx.B.Len()+4))
 		ctx.encodeIDF(dir)
 	}
 	binary.Write(monad, b, uint32(0))
 	def.Write(buffer, b)
 	buffer.WriteTo(w)
 	if monad.Err != nil {
-		panic(monad.Err)
+		log.Fatal(monad.Err)
 	}
 }
 
@@ -239,11 +248,11 @@ func (d deferedWriter) Write(buffer *bytes.Buffer, bo binary.ByteOrder) {
 		monad.Write(i.data)
 		err := binary.Write(overwriteBuffer{buffer, i.index}, bo, uint32(addr))
 		if err != nil {
-			panic(err)
+			log.Fatal(err)
 		}
 	}
 	if monad.Err != nil {
-		panic(monad.Err)
+		log.Fatal(monad.Err)
 	}
 }
 
