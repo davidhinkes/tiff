@@ -152,7 +152,7 @@ func Decode(r io.ReadSeeker) (Tiff, error) {
 
 type encodingContext struct {
 	W *writerMonad
-	D *deferedWrite
+	D *deferedWriter
 	B *bytes.Buffer
 	O binary.ByteOrder
 }
@@ -193,7 +193,7 @@ func (t Tiff) Encode(w io.Writer, b binary.ByteOrder) {
 	monad := &writerMonad{
 		W: buffer,
 	}
-	def := new(deferedWrite)
+	def := new(deferedWriter)
 	ctx := encodingContext{
 		W: monad,
 		D: def,
@@ -217,11 +217,11 @@ func (t Tiff) Encode(w io.Writer, b binary.ByteOrder) {
 	}
 }
 
-type deferedWrite struct {
+type deferedWriter struct {
 	items []item
 }
 
-func (d *deferedWrite) add(e item) {
+func (d *deferedWriter) add(e item) {
 	d.items = append(d.items, e)
 }
 
@@ -230,7 +230,7 @@ type item struct {
 	data  []byte
 }
 
-func (d deferedWrite) Write(buffer *bytes.Buffer, bo binary.ByteOrder) {
+func (d deferedWriter) Write(buffer *bytes.Buffer, bo binary.ByteOrder) {
 	monad := &writerMonad{W: buffer}
 	for _, i := range d.items {
 		padding := make([]byte, 4-buffer.Len()%4)
