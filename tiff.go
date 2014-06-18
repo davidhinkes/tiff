@@ -150,13 +150,56 @@ func Decode(r io.ReadSeeker) (Tiff, error) {
 	}
 }
 
+type encodingContext struct {
+	W *writerMonad
+	D *deferedWrite
+	B *bytes.Buffer
+	O binary.ByteOrder
+}
+
+func (ctx encodingContext) encodeIDF(idf IDF) {
+	binary.Write(ctx.W, ctx.O, uint32(ctx.B.Len()+4))
+	binary.Write(ctx.W, ctx.O, uint16(len(idf.Entries)))
+	for tag, e := range idf.Entries {
+		ctx.encodeEntry(tag, e)
+	}
+}
+
+func (ctx encodingContext) encodeEntry(tag uint16, val interface{}) {
+	coder, ok := codersByType[reflect.TypeOf(val)]
+	if !ok {
+		return
+	}
+	bo := ctx.O
+	binary.Write(ctx.W, bo, tag)
+	binary.Write(ctx.W, bo, coder.ID)
+	v, count := coder.Marshal(val, bo)
+	binary.Write(ctx.W, bo, count)
+	if len(v) <= 4 {
+		for len(v) < 4 {
+			v = append(v, byte(0))
+		}
+		binary.Write(ctx.W, bo, v)
+	} else {
+		ctx.D.add(item{uint32(ctx.B.Len()), v})
+		// Will be over-written by defered.
+		binary.Write(ctx.W, bo, uint32(0))
+	}
+}
+
 func (t Tiff) Encode(w io.Writer, b binary.ByteOrder) {
 	buffer := new(bytes.Buffer)
 	// Operations on monad do not need to be checked for errors.
 	monad := &writerMonad{
 		W: buffer,
 	}
-	var def deferedWrite
+	def := new(deferedWrite)
+	ctx := encodingContext{
+		W: monad,
+		D: def,
+		B: buffer,
+		O: b,
+	}
 	if b == binary.BigEndian {
 		monad.Write([]byte("MM"))
 	} else {
@@ -164,28 +207,7 @@ func (t Tiff) Encode(w io.Writer, b binary.ByteOrder) {
 	}
 	binary.Write(monad, b, uint16(42))
 	for _, dir := range t.IDFs {
-		binary.Write(monad, b, uint32(buffer.Len()+4))
-		binary.Write(monad, b, uint16(len(dir.Entries)))
-		for tag, e := range dir.Entries {
-			coder, ok := codersByType[reflect.TypeOf(e)]
-			if !ok {
-				continue
-			}
-			binary.Write(monad, b, tag)
-			binary.Write(monad, b, coder.ID)
-			v, count := coder.Marshal(e, b)
-			binary.Write(monad, b, count)
-			if len(v) <= 4 {
-				for len(v) < 4 {
-					v = append(v, byte(0))
-				}
-				binary.Write(monad, b, v)
-			} else {
-				def.add(item{uint32(buffer.Len()), v})
-				// Will be over-written by defered.
-				binary.Write(monad, b, uint32(0))
-			}
-		}
+		ctx.encodeIDF(dir)
 	}
 	binary.Write(monad, b, uint32(0))
 	def.Write(buffer, b)
