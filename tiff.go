@@ -46,6 +46,96 @@ func (w *writerMonad) Write(b []byte) (int, error) {
 	return n, w.Err
 }
 
+type decodeContext struct {
+	R io.ReadSeeker
+	O binary.ByteOrder
+}
+
+// decodeEntry will append to the map.
+func (ctx decodeContext) decodeEntry(m map[uint16]interface{}) error {
+	var tag uint16
+	var val interface{}
+	var err error
+
+	err = binary.Read(ctx.R, ctx.O, &tag)
+	if err != nil {
+		return err
+	}
+	var typeID uint16
+	err = binary.Read(ctx.R, ctx.O, &typeID)
+	if err != nil {
+		return err
+	}
+	var count uint32
+	err = binary.Read(ctx.R, ctx.O, &count)
+	if err != nil {
+		return err
+	}
+	coder, ok := codersByTypeID[typeID]
+	if !ok {
+		// typeID not known, this is OK and should not result in an error
+		return nil
+	}
+	valueSize := coder.PayloadSize(count)
+	value := make([]byte, valueSize)
+	if valueSize <= 4 {
+		bytes := make([]byte, 4)
+		_, err := ctx.R.Read(bytes)
+		if err != nil {
+			return err
+		}
+		copy(value, bytes)
+	} else {
+		var valueAddr uint32
+		err = binary.Read(ctx.R, ctx.O, &valueAddr)
+		if err != nil {
+			return err
+		}
+		// jump keeps track of where we are
+		jump, err := ctx.R.Seek(0, 1)
+		if err != nil {
+			return err
+		}
+		_, err = ctx.R.Seek(int64(valueAddr), 0)
+		if err != nil {
+			return err
+		}
+		_, err = ctx.R.Read(value)
+		if err != nil {
+			return err
+		}
+		_, err = ctx.R.Seek(jump, 0)
+		if err != nil {
+			return err
+		}
+	}
+	val, err = coder.Unmarshal(value, count, ctx.O)
+	if err != nil {
+		return err
+	}
+	m[tag] = val
+	return nil
+}
+
+// decodeIDF assumes the next bytes to read are an IDF.
+func (ctx decodeContext) decodeIDF() (IDF, error) {
+	var err error
+	var idf = IDF{map[uint16]interface{}{}}
+	r := ctx.R
+	ordering := ctx.O
+	var numEntries uint16
+	err = binary.Read(r, ordering, &numEntries)
+	if err != nil {
+		return idf, err
+	}
+	for z := uint16(0); z < numEntries; z++ {
+		if err := ctx.decodeEntry(idf.Entries); err != nil {
+			return idf, err
+		}
+	}
+	return idf, nil
+}
+
 func Decode(r io.ReadSeeker) (Tiff, error) {
 	var err error
 	var tiff = Tiff{}
@@ -71,8 +161,11 @@ func Decode(r io.ReadSeeker) (Tiff, error) {
 	if magicNumber != 42 {
 		return Tiff{}, fmt.Errorf("expecting magic number equal to 42; got %v", magicNumber)
 	}
+	ctx := decodeContext{
+		R: r,
+		O: ordering,
+	}
 	for {
-		var idf = IDF{map[uint16]interface{}{}}
 		var idfAddr uint32
 		err = binary.Read(r, ordering, &idfAddr)
 		if err != nil {
@@ -85,68 +178,9 @@ func Decode(r io.ReadSeeker) (Tiff, error) {
 		if err != nil {
 			return tiff, err
 		}
-		var numEntries uint16
-		err = binary.Read(r, ordering, &numEntries)
+		idf, err := ctx.decodeIDF()
 		if err != nil {
 			return tiff, err
-		}
-		for z := uint16(0); z < numEntries; z++ {
-			var tag uint16
-			err = binary.Read(r, ordering, &tag)
-			if err != nil {
-				return tiff, err
-			}
-			var typeID uint16
-			err = binary.Read(r, ordering, &typeID)
-			if err != nil {
-				return tiff, err
-			}
-			var count uint32
-			err = binary.Read(r, ordering, &count)
-			if err != nil {
-				return tiff, err
-			}
-			coder, ok := codersByTypeID[typeID]
-			if !ok {
-				continue
-			}
-			valueSize := coder.PayloadSize(count)
-			value := make([]byte, valueSize)
-			if valueSize <= 4 {
-				bytes := make([]byte, 4)
-				_, err := r.Read(bytes)
-				if err != nil {
-					return tiff, err
-				}
-				copy(value, bytes)
-			} else {
-				var valueAddr uint32
-				err = binary.Read(r, ordering, &valueAddr)
-				if err != nil {
-					return tiff, err
-				}
-				jump, err := r.Seek(0, 1)
-				if err != nil {
-					return tiff, err
-				}
-				_, err = r.Seek(int64(valueAddr), 0)
-				if err != nil {
-					return tiff, err
-				}
-				_, err = r.Read(value)
-				if err != nil {
-					return tiff, err
-				}
-				_, err = r.Seek(jump, 0)
-				if err != nil {
-					return tiff, err
-				}
-			}
-			valueAsInterface, err := coder.Unmarshal(value, count, ordering)
-			if err != nil {
-				return tiff, err
-			}
-			idf.Entries[tag] = valueAsInterface
 		}
 		tiff.IDFs = append(tiff.IDFs, idf)
 	}
@@ -163,7 +197,7 @@ type encodingContext struct {
 func (ctx encodingContext) encodeIDF(idf IDF) {
 	binary.Write(ctx.W, ctx.O, uint16(len(idf.Entries)))
 	// The tiff spec says the tags should be encoded in increasing order.
-	var tags []int  // Using []int instead of []uint16 to make life easier with sort.Ints.
+	var tags []int // Using []int instead of []uint16 to make life easier with sort.Ints.
 	for tag, _ := range idf.Entries {
 		tags = append(tags, int(tag))
 	}
