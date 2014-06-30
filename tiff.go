@@ -186,16 +186,9 @@ func Decode(r io.ReadSeeker) (Tiff, error) {
 	}
 }
 
-type encodingContext struct {
-	W *writerMonad
-	D *deferedWriter
-	B *bytes.Buffer
-	O binary.ByteOrder
-}
-
 // encodeIDF assumes that the writer is already at the desired location.
-func (ctx encodingContext) encodeIDF(idf IDF) {
-	binary.Write(ctx.W, ctx.O, uint16(len(idf.Entries)))
+func encodeIDF(bldr *builder, idf IDF, bo binary.ByteOrder) (uint32, error) {
+	binary.Write(bldr.buffer, bo, uint16(len(idf.Entries)))
 	// The tiff spec says the tags should be encoded in increasing order.
 	var tags []int // Using []int instead of []uint16 to make life easier with sort.Ints.
 	for tag, _ := range idf.Entries {
@@ -203,44 +196,48 @@ func (ctx encodingContext) encodeIDF(idf IDF) {
 	}
 	sort.Ints(tags)
 	for _, tag := range tags {
-		ctx.encodeEntry(uint16(tag), idf.Entries[uint16(tag)])
+		err := encodeEntry(bldr, uint16(tag), idf.Entries[uint16(tag)], bo)
+		if err != nil {
+			return 0, err
+		}
 	}
+	at := bldr.buffer.Len()
+	binary.Write(bldr.buffer, bo, uint32(0))
+	// The tiff spec says the tags should be encoded in increasing order.
+	return uint32(at), nil
 }
 
-func (ctx encodingContext) encodeEntry(tag uint16, val interface{}) {
+func encodeEntry(bldr *builder, tag uint16, val interface{}, bo binary.ByteOrder) error {
 	coder, ok := codersByType[reflect.TypeOf(val)]
 	if !ok {
-		return
+		return nil
 	}
-	bo := ctx.O
-	binary.Write(ctx.W, bo, tag)
-	binary.Write(ctx.W, bo, coder.ID)
+	buf := bldr.buffer
+	binary.Write(buf, bo, tag)
+	binary.Write(buf, bo, coder.ID)
 	v, count := coder.Marshal(val, bo)
-	binary.Write(ctx.W, bo, count)
+	binary.Write(buf, bo, count)
 	if len(v) <= 4 {
 		for len(v) < 4 {
 			v = append(v, byte(0))
 		}
-		binary.Write(ctx.W, bo, v)
+		binary.Write(buf, bo, v)
 	} else {
-		ctx.D.add(item{uint32(ctx.B.Len()), v})
+		entryBldr := makeBuilder()
+		entryBldr.buffer.Write(v)
+		bldr.builders[uint32(buf.Len())] = entryBldr
 		// Will be over-written by defered.
-		binary.Write(ctx.W, bo, uint32(0))
+		binary.Write(buf, bo, uint32(0))
 	}
+	return nil
 }
 
 func (t Tiff) Encode(w io.Writer, b binary.ByteOrder) {
-	buffer := new(bytes.Buffer)
+	bldr := makeBuilder()
+	buffer := bldr.buffer
 	// Operations on monad do not need to be checked for errors.
 	monad := &writerMonad{
 		W: buffer,
-	}
-	def := new(deferedWriter)
-	ctx := encodingContext{
-		W: monad,
-		D: def,
-		B: buffer,
-		O: b,
 	}
 	if b == binary.BigEndian {
 		monad.Write([]byte("MM"))
@@ -248,43 +245,22 @@ func (t Tiff) Encode(w io.Writer, b binary.ByteOrder) {
 		monad.Write([]byte("II"))
 	}
 	binary.Write(monad, b, uint16(42))
+	var previousAddr = uint32(buffer.Len())
+	binary.Write(monad, b, uint32(0)) // will be overwritten
+	var previousBldr = bldr
 	for _, dir := range t.IDFs {
-		binary.Write(ctx.W, ctx.O, uint32(ctx.B.Len()+4))
-		ctx.encodeIDF(dir)
-	}
-	binary.Write(monad, b, uint32(0))
-	def.Write(buffer, b)
-	buffer.WriteTo(w)
-	if monad.Err != nil {
-		log.Fatal(monad.Err)
-	}
-}
-
-type deferedWriter struct {
-	items []item
-}
-
-func (d *deferedWriter) add(e item) {
-	d.items = append(d.items, e)
-}
-
-type item struct {
-	index uint32
-	data  []byte
-}
-
-func (d deferedWriter) Write(buffer *bytes.Buffer, bo binary.ByteOrder) {
-	monad := &writerMonad{W: buffer}
-	for _, i := range d.items {
-		padding := make([]byte, 4-buffer.Len()%4)
-		monad.Write(padding)
-		addr := buffer.Len()
-		monad.Write(i.data)
-		err := binary.Write(overwriteBuffer{buffer, i.index}, bo, uint32(addr))
+		newBldr := makeBuilder()
+		addr, err := encodeIDF(newBldr, dir, b)
 		if err != nil {
 			log.Fatal(err)
 		}
+		previousBldr.builders[previousAddr] = newBldr
+		previousAddr = addr
+		previousBldr = newBldr
 	}
+	var finalOutputBuffer bytes.Buffer
+	bldr.WriteTo(&finalOutputBuffer, b)
+	finalOutputBuffer.WriteTo(w)
 	if monad.Err != nil {
 		log.Fatal(monad.Err)
 	}
@@ -297,4 +273,41 @@ type overwriteBuffer struct {
 
 func (o overwriteBuffer) Write(b []byte) (int, error) {
 	return copy(o.Bytes()[o.offset:], b), nil
+}
+
+type builder struct {
+	buffer   *bytes.Buffer
+	builders map[uint32]*builder
+}
+
+func (b builder) WriteTo(buf *bytes.Buffer, bo binary.ByteOrder) error {
+	var err error
+	offset := uint32(buf.Len())
+	_, err = buf.Write(b.buffer.Bytes())
+	if err != nil {
+		return fmt.Errorf("builder.Write: %v", err)
+	}
+	for addr, subBuilder := range b.builders {
+		for buf.Len()%4 != 0 {
+			_, err = buf.Write([]byte{0})
+			if err != nil {
+				return err
+			}
+		}
+		err = binary.Write(overwriteBuffer{buf, addr + offset}, bo, uint32(buf.Len()))
+		if err != nil {
+			return err
+		}
+		err = subBuilder.WriteTo(buf, bo)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func makeBuilder() *builder {
+	return &builder{
+		buffer:   &bytes.Buffer{},
+		builders: make(map[uint32]*builder)}
 }

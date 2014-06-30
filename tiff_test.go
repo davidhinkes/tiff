@@ -36,7 +36,7 @@ func TestSize(t *testing.T) {
 	buffer := new(bytes.Buffer)
 	tiff.Encode(buffer, binary.BigEndian)
 	if got, want := len(buffer.Bytes()), 26; got != want {
-		t.Errorf("got %v want %v", got, want)
+					t.Errorf("got %v want %v\n details: %v", got, want, buffer.Bytes())
 	}
 }
 
@@ -73,6 +73,10 @@ func TestByteOrder(t *testing.T) {
 	}
 	buffer := new(bytes.Buffer)
 	tiff.Encode(buffer, binary.BigEndian)
+	if buffer.Len() < 2 {
+		t.Error("encoded tiff buffer too small")
+		return
+	}
 	got := buffer.Bytes()[0:2]
 	if want := []byte("MM"); !reflect.DeepEqual(got, want) {
 		t.Errorf("got %v, want %v", got, want)
