@@ -6,6 +6,15 @@ import (
 	"reflect"
 )
 
+type coder struct {
+	Unmarshal   func(b []byte, count uint32, o binary.ByteOrder) (interface{}, error)
+	PayloadSize func(count uint32) int
+	// Marshal returns the bytes to write and the count.
+	Marshal func(val interface{}, o binary.ByteOrder) ([]byte, uint32)
+	ID      uint16
+	Zero    interface{}
+}
+
 type Rational struct {
 	Denumerator uint32
 	Numerator   uint32
